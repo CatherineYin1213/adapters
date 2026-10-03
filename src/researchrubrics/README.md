@@ -33,8 +33,8 @@ Negative-weight criteria appear only in the numerator, so a satisfied negative c
   - one judge call per rubric, binary grading, JSON response format, `max_tokens=50000`, three attempts with exponential backoff, 20 concurrent calls
   - reports over 150k estimated tokens use the upstream chunk + synthesis path
   - a rubric that still fails after retries scores 0.0, as upstream
-- Any LiteLLM-supported judge can be used via `JUDGE_MODEL` (default `gemini/gemini-2.5-pro`), with an optional `JUDGE_API_BASE` / `JUDGE_API_KEY` for proxies.
-- Per-rubric verdicts, judge reasoning and a summary are written to `/logs/verifier/rubric_results.jsonl` and `/logs/verifier/summary.json`.
+- Any LiteLLM-supported judge can be used via `JUDGE_MODEL` (default `gemini/gemini-2.5-pro`), with optional `JUDGE_API_BASE` / `JUDGE_API_KEY` for proxies and `JUDGE_API_VERSION` for Azure-style gateways (`JUDGE_MODEL=azure/<deployment>`).
+- Per-rubric verdicts, judge reasoning and a summary are written to `/logs/verifier/rubric_results.jsonl` and `/logs/verifier/summary.json`. Both record the model name the endpoint reported for each judgement (`judge_model_served` / `judge_models_served`), since a gateway may route a requested name to a different model.
 - Rubrics live only in `tests/`, so the agent never sees them.
 
 ## Generated Task Structure
@@ -181,11 +181,12 @@ Planned reproduction:
 ## Notes & Caveats
 
 - **LLM judge required**: every verification calls the judge once per rubric (about 26 calls per task and 2,593 per full run), so judge cost scales with report length. The released code estimates $0.01–$0.05 per call with Gemini 2.5 Pro.
-- **Judge model**: upstream hardcodes the dated preview `gemini-2.5-pro-preview-06-05` behind a LiteLLM proxy (`litellm_proxy/...`). The adapter defaults to `gemini/gemini-2.5-pro`, the GA release, called directly. Any LiteLLM id works via `JUDGE_MODEL`. Parity must use the same judge on both sides.
+- **Judge model**: upstream hardcodes the dated preview `gemini-2.5-pro-preview-06-05` behind a LiteLLM proxy (`litellm_proxy/...`). The adapter defaults to `gemini/gemini-2.5-pro`, the GA release of the same model, called directly. As of October 2026 Google no longer serves the 2.5 models to new API users (existing users keep access), so new accounts may need a different judge or a gateway that still serves 2.5 Pro. Any LiteLLM id works via `JUDGE_MODEL`. Parity must use the same judge on both sides, and `judge_models_served` in `summary.json` should be checked to confirm which model actually graded.
 - **Oracle**: ResearchRubrics ships no reference reports, so oracle validation has two parts (the plan is to be confirmed with the Harbor team):
   1. **Pipeline check, `ORACLE_MODE=true`** (same approach as the clbench adapter). The verifier confirms that `/app/report.md` was written and non-empty and that the task's rubrics load, then writes reward 1.0 without calling the judge. This is expected to give 100% on all 101 tasks at no judge cost. It validates the environment, solution and verifier wiring only, **not** grading correctness. Never set `ORACLE_MODE` for agent runs.
   2. **Grading check, real judge.** Run the oracle with `ORACLE_MODE` unset to grade the staged reports with the LLM judge. By default, `solution/report.md` is a rubric-derived report that restates each task's positive criteria. Pass `--oracle-reports-dir` to stage real reports instead, for example the best agent report per task from parity runs. Judge scores are not deterministic and are not expected to reach 1.0. The measured score will be reported here once it has been run.
 - **Negative rewards**: the reward is the upstream compliance score, unclamped. A report that satisfies more negative-weight criteria than positive ones scores below 0.
+- **JSON mode through Azure-style gateways**: LiteLLM drops `response_format` for Azure deployments it does not recognize (e.g. a Gemini model behind an Azure-style gateway), and the judge then wraps its JSON in a Markdown fence that upstream's `json.loads` rejects. The verifier passes `allowed_openai_params=["response_format"]` so the setting is always sent. Parsing is unchanged from upstream.
 - **Judge failures**: as upstream, a rubric whose judge call fails three times scores 0.0. If *every* judge call for a task fails (usually a missing key or a bad model id), the verifier exits non-zero without writing a reward, so a configuration error does not show up as a score of 0.
 - **Empty reports**: a missing or empty `/app/report.md` scores 0.0. Upstream skips reports it cannot load, which has the same effect on the mean.
 - **Context limit**: chunking triggers above 150k estimated tokens (600k characters), as in upstream, which assumes Gemini 2.5 Pro's context window. With a smaller-context judge, very long reports may fail. Set `JUDGE_MAX_TOKENS` below the judge's output limit for non-Gemini judges.
@@ -210,7 +211,7 @@ uv remove <package>  # remove a dependency
   uv sync
   ```
 - API keys (export as environment variables):
-  - Judge: `GEMINI_API_KEY` for the default judge, or the key for whichever provider `JUDGE_MODEL` points at (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), or `JUDGE_API_KEY` + `JUDGE_API_BASE` for a LiteLLM proxy
+  - Judge: `GEMINI_API_KEY` for the default judge, or the key for whichever provider `JUDGE_MODEL` points at (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), or `JUDGE_API_KEY` + `JUDGE_API_BASE` for a LiteLLM proxy (plus `JUDGE_API_VERSION` and an `azure/<deployment>` model id for an Azure-style gateway)
   - Agent: model keys as needed by your agent
 
 ## Troubleshooting

@@ -36,6 +36,8 @@ VERIFIER_DIR = Path("/logs/verifier")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL") or "gemini/gemini-2.5-pro"
 JUDGE_API_KEY = os.environ.get("JUDGE_API_KEY") or None
 JUDGE_API_BASE = os.environ.get("JUDGE_API_BASE") or None
+# Only needed for Azure-style gateways (JUDGE_MODEL="azure/<deployment>").
+JUDGE_API_VERSION = os.environ.get("JUDGE_API_VERSION") or None
 JUDGE_MAX_TOKENS = int(os.environ.get("JUDGE_MAX_TOKENS") or 50000)
 JUDGE_MAX_CONCURRENT = int(os.environ.get("JUDGE_MAX_CONCURRENT") or 20)
 ORACLE_MODE = (os.environ.get("ORACLE_MODE") or "").lower() == "true"
@@ -65,6 +67,11 @@ async def _complete(system: str, user: str):
         response_format={"type": "json_object"},
         api_key=JUDGE_API_KEY,
         base_url=JUDGE_API_BASE,
+        api_version=JUDGE_API_VERSION,
+        # LiteLLM silently drops response_format for Azure deployments it does
+        # not recognize (e.g. Gemini behind an Azure-style gateway); keep it so
+        # the judge returns bare JSON exactly as upstream expects.
+        allowed_openai_params=["response_format"],
     )
 
 
@@ -103,6 +110,7 @@ async def _evaluate_single(rubric: dict, content: str) -> dict:
                 "score": float(data.get("score")),
                 "confidence": float(data.get("confidence")),
                 "reasoning": data.get("reasoning"),
+                "judge_model_served": response.model,
             }
         except json.JSONDecodeError as e:
             print(f"JSON decode error on attempt {attempt + 1}: {e}", file=sys.stderr)
@@ -145,6 +153,7 @@ async def _evaluate_with_chunks(rubric: dict, content: str) -> dict:
         "score": float(data.get("score")),
         "confidence": float(data.get("confidence")),
         "reasoning": data.get("reasoning"),
+        "judge_model_served": response.model,
     }
 
 
@@ -165,6 +174,7 @@ async def evaluate_rubric(
                 "score": 0.0,
                 "confidence": 0.0,
                 "reasoning": f"Evaluation failed: {e}",
+                "judge_model_served": None,
                 "success": False,
             }
     return {**rubric, **result}
@@ -221,6 +231,11 @@ async def main() -> int:
     summary = {
         "compliance_score": score,
         "judge_model": JUDGE_MODEL,
+        # Model names the endpoint reported back; a gateway may route the
+        # requested name to a different model.
+        "judge_models_served": sorted(
+            {r["judge_model_served"] for r in results if r["judge_model_served"]}
+        ),
         "n_rubrics": len(results),
         "n_satisfied": sum(r["score"] >= 1.0 for r in results),
         "n_judge_errors": n_failed,
