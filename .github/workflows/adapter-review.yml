@@ -130,6 +130,8 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
+    env:
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
     steps:
       - name: Checkout base repository
         uses: actions/checkout@v6
