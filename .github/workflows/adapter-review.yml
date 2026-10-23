@@ -155,6 +155,7 @@ jobs:
           REVIEW_SHA: ${{ needs.structural-validation.outputs.sha }}
         uses: actions/github-script@v9
         with:
+          retries: 3
           script: |
             const { data: pr } = await github.rest.pulls.get({
               ...context.repo, pull_number: context.issue.number,
