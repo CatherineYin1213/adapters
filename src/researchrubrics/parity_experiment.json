@@ -9,7 +9,9 @@
     "number_of_runs": null,
     "notes": "Parity not yet run; plan (agent, model, judge, runs) to be agreed with the Harbor team.",
     "original_parity_repo": "https://github.com/scaleapi/researchrubrics",
-    "adapter_pr": [],
+    "adapter_pr": [
+      "https://github.com/harbor-framework/adapters/pull/5"
+    ],
     "dataset_pr": [],
     "parity_pr": [],
     "metrics": [
