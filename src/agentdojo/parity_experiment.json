@@ -9,7 +9,7 @@
     "number_of_runs": null,
     "notes": "user split (no injections). Parity not yet run; plan (agent, model, runs) to be agreed with the Harbor team.",
     "original_parity_repo": "https://github.com/ethz-spylab/agentdojo",
-    "adapter_pr": [],
+    "adapter_pr": ["https://github.com/harbor-framework/adapters/pull/64"],
     "dataset_pr": [],
     "parity_pr": [],
     "metrics": [
@@ -33,7 +33,7 @@
     "number_of_runs": null,
     "notes": "attack split (important_instructions_no_model_name). Parity not yet run; plan (agent, model, attack, runs) to be agreed with the Harbor team.",
     "original_parity_repo": "https://github.com/ethz-spylab/agentdojo",
-    "adapter_pr": [],
+    "adapter_pr": ["https://github.com/harbor-framework/adapters/pull/64"],
     "dataset_pr": [],
     "parity_pr": [],
     "metrics": [
