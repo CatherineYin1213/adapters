@@ -7,17 +7,24 @@ prompts/ are copied verbatim. Behaviour kept identical to upstream:
 
 - binary grading (Satisfied = 1.0, Not Satisfied = 0.0), one judge call per rubric
 - system + user prompt, JSON response format, max_tokens = 50000
-- up to 3 attempts per rubric; a rubric that still fails scores 0.0
+- up to 3 attempts per rubric; a judge response that still cannot be parsed
+  scores 0.0 (upstream's explicit "Error" verdict)
 - documents over (200000 - 50000) estimated tokens are chunked (100000 tokens
   per chunk) and graded via the chunk + synthesis prompts
 - compliance = sum(weight * score) / sum(positive weights); negative-weight
   rubrics only subtract, so the score can drop below 0
+
+One deliberate difference: upstream also scores 0.0 when the judge call itself
+fails (connection error, timeout, rate limit, auth). That is an outage, not a
+judgement of the report, so here any such failure leaves the reward unwritten
+and the verifier exits non-zero.
 
 The judge model and endpoint are configurable through environment variables
 (see task.toml [verifier.env]); upstream used Gemini 2.5 Pro through LiteLLM.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -30,6 +37,7 @@ litellm.suppress_debug_info = True
 REPORT_FILE = Path("/app/report.md")
 TESTS_DIR = Path(__file__).parent
 RUBRICS_FILE = TESTS_DIR / "rubrics.json"
+ORACLE_SHA256_FILE = TESTS_DIR / "oracle_report.sha256"
 PROMPTS_DIR = TESTS_DIR / "prompts"
 VERIFIER_DIR = Path("/logs/verifier")
 
@@ -56,23 +64,30 @@ SYNTHESIS_PROMPT_TEMPLATE = (PROMPTS_DIR / "synthesis_prompt_template.txt").read
 )
 
 
+class JudgeUnavailableError(Exception):
+    """The judge call raised, so there is no response to grade."""
+
+
 async def _complete(system: str, user: str):
-    return await litellm.acompletion(
-        model=JUDGE_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        max_tokens=JUDGE_MAX_TOKENS,
-        response_format={"type": "json_object"},
-        api_key=JUDGE_API_KEY,
-        base_url=JUDGE_API_BASE,
-        api_version=JUDGE_API_VERSION,
-        # LiteLLM silently drops response_format for Azure deployments it does
-        # not recognize (e.g. Gemini behind an Azure-style gateway); keep it so
-        # the judge returns bare JSON exactly as upstream expects.
-        allowed_openai_params=["response_format"],
-    )
+    try:
+        return await litellm.acompletion(
+            model=JUDGE_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=JUDGE_MAX_TOKENS,
+            response_format={"type": "json_object"},
+            api_key=JUDGE_API_KEY,
+            base_url=JUDGE_API_BASE,
+            api_version=JUDGE_API_VERSION,
+            # LiteLLM silently drops response_format for Azure deployments it
+            # does not recognize (e.g. Gemini behind an Azure-style gateway);
+            # keep it so the judge returns bare JSON exactly as upstream expects.
+            allowed_openai_params=["response_format"],
+        )
+    except Exception as e:
+        raise JudgeUnavailableError(f"{type(e).__name__}: {e}") from e
 
 
 def chunk_document(content: str, max_tokens: int = CHUNK_MAX_TOKENS) -> list[str]:
@@ -167,7 +182,22 @@ async def evaluate_rubric(
             else:
                 result = await _evaluate_single(rubric, content)
             result["success"] = True
+            result["judge_unavailable"] = False
+        except JudgeUnavailableError as e:
+            # No judge response: an outage, never a score (see module docstring).
+            print(f"Judge unavailable: {e}", file=sys.stderr)
+            result = {
+                "verdict": "Error",
+                "score": None,
+                "confidence": None,
+                "reasoning": f"Judge unavailable: {e}",
+                "judge_model_served": None,
+                "success": False,
+                "judge_unavailable": True,
+            }
         except Exception as e:
+            # The judge answered but the response could not be parsed: upstream
+            # records verdict "Error" with score 0.0.
             print(f"Evaluation failed: {e}", file=sys.stderr)
             result = {
                 "verdict": "Error",
@@ -176,6 +206,7 @@ async def evaluate_rubric(
                 "reasoning": f"Evaluation failed: {e}",
                 "judge_model_served": None,
                 "success": False,
+                "judge_unavailable": False,
             }
     return {**rubric, **result}
 
@@ -186,11 +217,25 @@ def compliance_score(results: list[dict]) -> float:
     return numerator / denominator if denominator > 0 else 0.0
 
 
+def read_report() -> str:
+    """Return the agent's report, or "" when there is no readable report."""
+    # Only a regular file counts: a symlink could point at grader files such
+    # as tests/rubrics.json.
+    if REPORT_FILE.is_symlink() or not REPORT_FILE.is_file():
+        return ""
+    try:
+        return REPORT_FILE.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        # Upstream skips reports it cannot load.
+        print(f"Report is not valid UTF-8 ({e}); treating it as missing")
+        return ""
+
+
 async def main() -> int:
     VERIFIER_DIR.mkdir(parents=True, exist_ok=True)
     rubrics = json.loads(RUBRICS_FILE.read_text())
 
-    content = REPORT_FILE.read_text(encoding="utf-8") if REPORT_FILE.exists() else ""
+    content = read_report()
     if not content:
         # Upstream skips reports it cannot load, so they contribute 0.
         print(f"No report found at {REPORT_FILE} (or it is empty); reward = 0")
@@ -198,9 +243,14 @@ async def main() -> int:
         return 0
 
     if ORACLE_MODE:
-        # Pipeline check only (same approach as the clbench adapter): the report
-        # was written and the rubrics load. No judge calls, so this says nothing
-        # about grading correctness.
+        # Pipeline check only (same approach as the clbench adapter): the staged
+        # oracle report arrived and the rubrics load. No judge calls, so this
+        # says nothing about grading correctness. Any other report fails, so a
+        # stray ORACLE_MODE=true can never score an agent run.
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if digest != ORACLE_SHA256_FILE.read_text().strip():
+            print("ORACLE_MODE: report is not the staged oracle report", file=sys.stderr)
+            return 1
         if not rubrics or not all(
             {"criterion", "weight", "axis"} <= rubric.keys() for rubric in rubrics
         ):
@@ -220,11 +270,21 @@ async def main() -> int:
         for r in results:
             f.write(json.dumps(r) + "\n")
 
+    n_unavailable = sum(r["judge_unavailable"] for r in results)
+    if n_unavailable:
+        print(
+            f"{n_unavailable}/{len(results)} rubrics got no judge response; "
+            "not writing a reward.",
+            file=sys.stderr,
+        )
+        return 1
+
     n_failed = sum(not r["success"] for r in results)
     if n_failed == len(results):
-        # Every judge call failed: almost certainly a judge configuration problem
-        # (missing key, bad model name). Fail the verifier instead of reporting 0.
-        print("All judge calls failed; not writing a reward.", file=sys.stderr)
+        # No rubric could be parsed: almost certainly a judge configuration
+        # problem (e.g. a gateway that ignores JSON mode). Fail the verifier
+        # instead of reporting 0.
+        print("No judge response could be parsed; not writing a reward.", file=sys.stderr)
         return 1
 
     score = compliance_score(results)

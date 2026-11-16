@@ -11,6 +11,7 @@ Code: https://github.com/scaleapi/researchrubrics
 Dataset: https://huggingface.co/datasets/ScaleAI/researchrubrics
 """
 
+import hashlib
 import json
 import logging
 import shutil
@@ -133,7 +134,12 @@ class ResearchRubricsAdapter:
         (task_dir / "tests" / "rubrics.json").write_text(
             json.dumps(record["rubrics"], indent=2, ensure_ascii=False)
         )
-        (task_dir / "solution" / "report.md").write_text(self._oracle_report(record))
+        oracle_report = self._oracle_report(record)
+        (task_dir / "solution" / "report.md").write_text(oracle_report, encoding="utf-8")
+        # Lets ORACLE_MODE accept only the staged oracle report.
+        (task_dir / "tests" / "oracle_report.sha256").write_text(
+            hashlib.sha256(oracle_report.encode("utf-8")).hexdigest() + "\n"
+        )
 
     def run(self) -> tuple[int, int]:
         records = load_records(self.data_file)

@@ -32,27 +32,29 @@ Negative-weight criteria appear only in the numerator, so a satisfied negative c
   - the four upstream prompt templates are copied verbatim into `tests/prompts/`
   - one judge call per rubric, binary grading, JSON response format, `max_tokens=50000`, three attempts with exponential backoff, 20 concurrent calls
   - reports over 150k estimated tokens use the upstream chunk + synthesis path
-  - a rubric that still fails after retries scores 0.0, as upstream
+  - a judge response that still cannot be parsed after retries scores 0.0, as upstream; a judge outage fails the verifier instead (see Notes & Caveats)
 - Any LiteLLM-supported judge can be used via `JUDGE_MODEL` (default `gemini/gemini-2.5-pro`), with optional `JUDGE_API_BASE` / `JUDGE_API_KEY` for proxies and `JUDGE_API_VERSION` for Azure-style gateways (`JUDGE_MODEL=azure/<deployment>`).
 - Per-rubric verdicts, judge reasoning and a summary are written to `/logs/verifier/rubric_results.jsonl` and `/logs/verifier/summary.json`. Both record the model name the endpoint reported for each judgement (`judge_model_served` / `judge_models_served`), since a gateway may route a requested name to a different model.
-- Rubrics live only in `tests/`, so the agent never sees them.
+- The verifier runs in its own container (`environment_mode = "separate"`), built from `tests/Dockerfile`. Only `/app/report.md` is copied over from the agent's container, so the agent never sees the rubrics, the judge prompts or the judge client and cannot tamper with them. A symlinked or non-UTF-8 report counts as missing.
 
 ## Generated Task Structure
 
 ```
 researchrubrics/
 ├── {sample_id}/
-│   ├── task.toml                 # Task config; complexity tags in [metadata]; judge env in [verifier.env]
+│   ├── task.toml                 # Task config; report handoff (artifacts); separate verifier; judge env in [verifier.env]
 │   ├── instruction.md            # Upstream prompt + output location (/app/report.md)
 │   ├── environment/
-│   │   └── Dockerfile            # python:3.12-slim + litellm (judge client)
+│   │   └── Dockerfile            # Agent image: python:3.12-slim + curl
 │   ├── solution/
 │   │   ├── solve.sh              # Copies report.md to /app/report.md
 │   │   └── report.md             # Staged oracle report
 │   └── tests/
+│       ├── Dockerfile            # Verifier image: python:3.12-slim + litellm (judge client) + tests/
 │       ├── test.sh               # Runs evaluate.py
 │       ├── evaluate.py           # Upstream rubric evaluator port; writes reward.txt
 │       ├── rubrics.json          # This task's weighted rubric criteria
+│       ├── oracle_report.sha256  # Hash of solution/report.md, checked in ORACLE_MODE
 │       └── prompts/              # Upstream judge prompts (verbatim)
 ```
 
@@ -77,6 +79,7 @@ src/researchrubrics/
         ├── solution/
         │   └── solve.sh
         └── tests/
+            ├── Dockerfile
             ├── test.sh
             ├── evaluate.py
             └── prompts/
@@ -94,13 +97,13 @@ Simply run:
 export GEMINI_API_KEY=...   # judge key (default judge: gemini/gemini-2.5-pro)
 
 # Oracle pipeline check (no judge calls; see Notes & Caveats)
-ORACLE_MODE=true uvx --from harbor==0.23.0 harbor run -d scaleai/researchrubrics
+ORACLE_MODE=true uvx --from harbor==0.25.0 harbor run -d scaleai/researchrubrics
 
 # Oracle graded by the real judge
-uvx --from harbor==0.23.0 harbor run -d scaleai/researchrubrics
+uvx --from harbor==0.25.0 harbor run -d scaleai/researchrubrics
 
 # Use your specified agent and model
-uvx --from harbor==0.23.0 harbor run -d scaleai/researchrubrics -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.25.0 harbor run -d scaleai/researchrubrics -a <agent_name> -m "<model_name>"
 ```
 
 from the adapters repository root to evaluate on the entire dataset.
@@ -114,17 +117,17 @@ The example configuration file for the adapter is provided at `src/researchrubri
 ```bash
 # From the repository root
 # Run a job with the default adapter configuration
-uvx --from harbor==0.23.0 harbor run -c src/researchrubrics/run_researchrubrics.yaml -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.25.0 harbor run -c src/researchrubrics/run_researchrubrics.yaml -a <agent_name> -m "<model_name>"
 
 # Or run a job without configuration yaml but instead with locally prepared dataset path
-uvx --from harbor==0.23.0 harbor run -p datasets/researchrubrics -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.25.0 harbor run -p datasets/researchrubrics -a <agent_name> -m "<model_name>"
 
 # Use a different judge (any LiteLLM model id)
 JUDGE_MODEL=openai/gpt-4.1 JUDGE_MAX_TOKENS=32768 OPENAI_API_KEY=... \
-  uvx --from harbor==0.23.0 harbor run -p datasets/researchrubrics -a <agent_name> -m "<model_name>"
+  uvx --from harbor==0.25.0 harbor run -p datasets/researchrubrics -a <agent_name> -m "<model_name>"
 
 # Resume a previously started job
-uvx --from harbor==0.23.0 harbor job resume -p /path/to/jobs/directory
+uvx --from harbor==0.25.0 harbor job resume -p /path/to/jobs/directory
 ```
 
 Results are saved in the `jobs/` directory by default (configurable via `jobs_dir` in the YAML config).
@@ -135,10 +138,10 @@ For quick testing or debugging a single task:
 
 ```bash
 # Run a single task with oracle (pipeline check, no judge calls)
-ORACLE_MODE=true uvx --from harbor==0.23.0 harbor trial start -p datasets/researchrubrics/<sample_id>
+ORACLE_MODE=true uvx --from harbor==0.25.0 harbor trial start -p datasets/researchrubrics/<sample_id>
 
 # Run a single task with a specific agent and model
-uvx --from harbor==0.23.0 harbor trial start -p datasets/researchrubrics/<sample_id> -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.25.0 harbor trial start -p datasets/researchrubrics/<sample_id> -a <agent_name> -m "<model_name>"
 ```
 
 Trial outputs are saved in the `trials/` directory by default (configurable via `--trials-dir`).
@@ -174,7 +177,7 @@ Planned reproduction:
 - **Original side**: produce one `<sample_id>.md` report per prompt with the agent under test, place them in `agent_responses/` of [scaleapi/researchrubrics](https://github.com/scaleapi/researchrubrics) at commit `2dc80e2`, then run `src/evaluate_rubrics/evaluate_reports_batch.py` and `src/calculate_metrics/calculate_compliance_score.py` with the same judge model.
 - **Harbor side**:
   ```bash
-  uvx --from harbor==0.23.0 harbor run -c src/researchrubrics/run_researchrubrics.yaml -a <agent> -m "<model>"
+  uvx --from harbor==0.25.0 harbor run -c src/researchrubrics/run_researchrubrics.yaml -a <agent> -m "<model>"
   ```
 - **Metric**: the mean of per-task `reward` is the benchmark's average compliance score. Rewards can be negative for reports that satisfy many negative-weight criteria.
 
@@ -183,15 +186,15 @@ Planned reproduction:
 - **LLM judge required**: every verification calls the judge once per rubric (about 26 calls per task and 2,593 per full run), so judge cost scales with report length. The released code estimates $0.01–$0.05 per call with Gemini 2.5 Pro.
 - **Judge model**: upstream hardcodes the dated preview `gemini-2.5-pro-preview-06-05` behind a LiteLLM proxy (`litellm_proxy/...`). The adapter defaults to `gemini/gemini-2.5-pro`, the GA release of the same model, called directly. As of October 2026 Google no longer serves the 2.5 models to new API users (existing users keep access), so new accounts may need a different judge or a gateway that still serves 2.5 Pro. Any LiteLLM id works via `JUDGE_MODEL`. Parity must use the same judge on both sides, and `judge_models_served` in `summary.json` should be checked to confirm which model actually graded.
 - **Oracle**: ResearchRubrics ships no reference reports, so oracle validation has two parts (the plan is to be confirmed with the Harbor team):
-  1. **Pipeline check, `ORACLE_MODE=true`** (same approach as the clbench adapter). The verifier confirms that `/app/report.md` was written and non-empty and that the task's rubrics load, then writes reward 1.0 without calling the judge. This is expected to give 100% on all 101 tasks at no judge cost. It validates the environment, solution and verifier wiring only, **not** grading correctness. Never set `ORACLE_MODE` for agent runs.
-  2. **Grading check, real judge.** Run the oracle with `ORACLE_MODE` unset to grade the staged reports with the LLM judge. By default, `solution/report.md` is a rubric-derived report that restates each task's positive criteria. Pass `--oracle-reports-dir` to stage real reports instead, for example the best agent report per task from parity runs. Judge scores are not deterministic and are not expected to reach 1.0. Measured on all 101 tasks with the default rubric-derived reports, judged by `gemini-2.5-pro` (as reported in `judge_models_served`): 2,593/2,593 rubrics graded, 0 judge errors, 0 trial exceptions, mean reward 0.210 (median 0.132, range −0.125 to 0.750, 6 tasks below 0). The low score is expected: these reports restate the criteria instead of doing the research, and the judge marks most content criteria as not met.
+  1. **Pipeline check, `ORACLE_MODE=true`** (same approach as the clbench adapter). The verifier confirms that `/app/report.md` is the staged oracle report (by SHA-256) and that the task's rubrics load, then writes reward 1.0 without calling the judge. Any other report fails the verifier without a reward, so a stray `ORACLE_MODE=true` cannot score an agent run. This is expected to give 100% on all 101 tasks at no judge cost. It validates the environment, solution and verifier wiring only, **not** grading correctness. Never set `ORACLE_MODE` for agent runs.
+  2. **Grading check, real judge.** Run the oracle with `ORACLE_MODE` unset to grade the staged reports with the LLM judge. By default, `solution/report.md` is a rubric-derived report that restates each task's positive criteria. Pass `--oracle-reports-dir` to stage real reports instead, for example the best agent report per task from parity runs. Judge scores are not deterministic and are not expected to reach 1.0. Measured on all 101 tasks with the default rubric-derived reports (before the verifier moved to its own container; the grading code path is unchanged), judged by `gemini-2.5-pro` (as reported in `judge_models_served`): 2,593/2,593 rubrics graded, 0 judge errors, 0 trial exceptions, mean reward 0.210 (median 0.132, range −0.125 to 0.750, 6 tasks below 0). The low score is expected: these reports restate the criteria instead of doing the research, and the judge marks most content criteria as not met.
 - **Negative rewards**: the reward is the upstream compliance score, unclamped. A report that satisfies more negative-weight criteria than positive ones scores below 0.
 - **JSON mode through Azure-style gateways**: LiteLLM drops `response_format` for Azure deployments it does not recognize (e.g. a Gemini model behind an Azure-style gateway), and the judge then wraps its JSON in a Markdown fence that upstream's `json.loads` rejects. The verifier passes `allowed_openai_params=["response_format"]` so the setting is always sent. Parsing is unchanged from upstream.
-- **Judge failures**: as upstream, a rubric whose judge call fails three times scores 0.0. If *every* judge call for a task fails (usually a missing key or a bad model id), the verifier exits non-zero without writing a reward, so a configuration error does not show up as a score of 0.
+- **Judge failures**: each rubric gets three attempts, as upstream. If the judge answers but its response still cannot be parsed, the rubric scores 0.0 with verdict `Error`, as upstream. Upstream also scores 0.0 when the judge call itself fails (connection error, timeout, rate limit, bad key); the adapter treats that as an outage instead: if any rubric gets no judge response, or no response for the task can be parsed at all, the verifier exits non-zero without writing a reward, so an outage or a configuration error never shows up as a score.
 - **Empty reports**: a missing or empty `/app/report.md` scores 0.0. Upstream skips reports it cannot load, which has the same effect on the mean.
-- **Context limit**: chunking triggers above 150k estimated tokens (600k characters), as in upstream, which assumes Gemini 2.5 Pro's context window. With a smaller-context judge, very long reports may fail. Set `JUDGE_MAX_TOKENS` below the judge's output limit for non-Gemini judges.
+- **Context limit**: chunking triggers above 150k estimated tokens (600k characters), as in upstream, which assumes Gemini 2.5 Pro's context window. With a smaller-context judge, a very long report can exceed the judge's context; that call then fails and the verifier exits without a reward. Set `JUDGE_MAX_TOKENS` below the judge's output limit for non-Gemini judges.
 - **Time-sensitive prompts**: some prompts (e.g. Current Events) refer to dated events, and web content changes over time, so scores can drift between runs on different dates.
-- **Web access**: agents need internet access (`network_mode = "public"`) and a web search/fetch capability.
+- **Web access**: agents need internet access (`network_mode = "public"`) and a web search/fetch capability. The prompts and rubrics are public on HuggingFace, so an agent searching the open web could in principle find the rubric for its task. The benchmark depends on open web research, so no network allowlist is applied, as upstream.
 
 ## Installation / Prerequisites
 
@@ -204,7 +207,7 @@ uv remove <package>  # remove a dependency
 ```
 
 - Docker installed and running
-- Harbor (commands above use `uvx --from harbor==0.23.0`)
+- Harbor 0.25.0 or later (commands above use `uvx --from harbor==0.25.0`)
 - Python 3.13+ with `uv` for task generation:
   ```bash
   cd src/researchrubrics
@@ -216,7 +219,7 @@ uv remove <package>  # remove a dependency
 
 ## Troubleshooting
 
-- **`RewardFileNotFoundError` / verifier exit code 1**: every judge call failed. Check that the judge key is exported on the host and that `JUDGE_MODEL` is a valid LiteLLM model id. Judge errors are in the verifier stdout.
+- **`RewardFileNotFoundError` / verifier exit code 1**: a judge call failed after three attempts (missing key, bad model id, outage, rate limit), or no judge response for the task could be parsed. Check that the judge key is exported on the host and that `JUDGE_MODEL` is a valid LiteLLM model id. Judge errors are in the verifier output, and per-rubric results in `/logs/verifier/rubric_results.jsonl`.
 - **Judge rejects `max_tokens`**: non-Gemini judges often allow fewer than 50,000 output tokens. Set `JUDGE_MAX_TOKENS` (e.g. `32768`).
 - **Judge rate limits**: lower `JUDGE_MAX_CONCURRENT` (default 20) or `n_concurrent_trials`.
 - **Verifier timeout**: long reports with many rubrics can take minutes. `[verifier].timeout_sec` is 1800.
