@@ -14,6 +14,10 @@ Mirrors agentdojo 0.1.35:
   formatted result, or the error message if the call failed
 - scoring follows `TaskSuite._check_task_result`, with the submitted answer as
   the model output and every suite tool call as the function stack trace
+
+Scoring is only reachable from inside this container: Harbor's collect hook
+runs collect.py here after the agent's container has stopped, and /evaluate
+rejects every other client.
 """
 
 import json
@@ -34,6 +38,7 @@ from starlette.responses import JSONResponse
 
 CONFIG = json.loads(Path(__file__).with_name("task_config.json").read_text())
 CLOSED_MESSAGE = "The task has ended; no further tool calls are accepted."
+LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 
 suite = get_suite(CONFIG["benchmark_version"], CONFIG["suite"])
 user_task = suite.get_user_task_by_id(CONFIG["user_task_id"])
@@ -74,7 +79,7 @@ class SuiteTool(Tool):
         return ToolResult(content=[TextContent(type="text", text=call_suite_tool(self.name, arguments))])
 
 
-mcp = FastMCP("agentdojo")
+mcp = FastMCP("tools")
 
 for function in runtime.functions.values():
     mcp.add_tool(
@@ -98,6 +103,9 @@ def submit_answer(answer: str) -> str:
 @mcp.custom_route("/evaluate", methods=["POST"])
 async def evaluate(request: Request) -> JSONResponse:
     """Score the episode. Closes the task first, so later tool calls cannot change the result."""
+    if request.client is None or request.client.host not in LOOPBACK_HOSTS:
+        # Only collect.py, running inside this container, may score the episode.
+        return JSONResponse({"error": "forbidden"}, status_code=403)
     state["closed"] = True
     model_output = [text_content_block_from_string(state["answer"] or "")]
     utility = suite._check_task_result(

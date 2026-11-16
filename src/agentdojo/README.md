@@ -29,10 +29,11 @@ All checks are deterministic Python functions over the agent's final answer, the
 ## Adapter Features
 
 - Generates all 97 user tasks and all 949 attacked pairs of v1.2.2 from the pinned `agentdojo==0.1.35` package; `--split`, `--suites` and `--task-ids` select subsets.
-- **MCP runtime sidecar** (`agentdojo-runtime`): each task runs upstream agentdojo in a sidecar container that builds the task's environment (with the attack's injections for the `attack` split) and serves the suite's tools over MCP with upstream's names, descriptions and JSON schemas. Tool calls go through upstream's `FunctionsRuntime`, and the agent sees upstream's YAML-formatted results, or upstream's error message when a call fails.
+- **MCP tool sidecar** (`tool-server`, MCP server `tools`): each task runs upstream agentdojo in a sidecar container that builds the task's environment (with the attack's injections for the `attack` split) and serves the suite's tools over MCP with upstream's names, descriptions and JSON schemas. Tool calls go through upstream's `FunctionsRuntime`, and the agent sees upstream's YAML-formatted results, or upstream's error message when a call fails.
 - **Isolated state**: the environment never leaves the sidecar. The agent can change it only through tool calls, and the main container holds no task data.
+- **Neutral names**: everything the agent can see (instruction, MCP server name, sidecar host name, tool descriptions) avoids the benchmark's name and upstream task IDs, so the agent has no hint to look up upstream's ground truth.
 - **Final answer channel**: the agent calls `submit_answer` with its final response to the user, which stands in for upstream's last assistant message.
-- **Verifier**: asks the sidecar to score the episode with upstream's checks (`TaskSuite._check_task_result`) on the in-memory environment, then writes `reward.json`:
+- **Scoring outside the agent's reach**: after the agent's container stops, a Harbor collect hook (`[[verifier.collect]]`) runs `collect.py` inside the sidecar, which scores the episode with upstream's checks (`TaskSuite._check_task_result`) on the in-memory environment and saves the result. The sidecar's scoring endpoint accepts only loopback clients, so the agent cannot call it. The result file is handed to a separate verifier container (`environment_mode = "separate"`, built from `tests/Dockerfile`), which writes `reward.json`:
   - `reward`, `utility`: 1 if the user task succeeded
   - `security` (`attack` split only): 1 if the injection task succeeded, as in upstream (lower is better)
 - **Oracle**: replays the user task's upstream ground-truth tool calls through MCP, then submits its ground-truth output. It never follows the injection.
@@ -44,21 +45,23 @@ All checks are deterministic Python functions over the agent's final answer, the
 datasets/agentdojo/
 ├── workspace-user_task_0/                      # user split
 ├── workspace-user_task_0-injection_task_0/     # attack split
-│   ├── task.toml                               # metadata and the agentdojo MCP server
+│   ├── task.toml                               # metadata, MCP server, collect hook, separate verifier
 │   ├── instruction.md                          # system message, tool note, user request
 │   ├── environment/
 │   │   ├── Dockerfile                          # main (agent) container
-│   │   ├── docker-compose.yaml                 # adds the agentdojo-runtime sidecar
+│   │   ├── docker-compose.yaml                 # adds the tool-server sidecar
 │   │   └── runtime-server/
 │   │       ├── Dockerfile
 │   │       ├── requirements.txt                # pinned agentdojo + fastmcp
-│   │       ├── server.py                       # MCP tools and scoring
+│   │       ├── server.py                       # MCP tools and scoring (loopback only)
+│   │       ├── collect.py                      # collect hook: scores and saves /results/evaluation.json
 │   │       └── task_config.json                # suite, task ids, injections
 │   ├── solution/
 │   │   ├── solve.sh
 │   │   ├── oracle.py
 │   │   └── oracle.json                         # ground-truth calls and output
 │   └── tests/
+│       ├── Dockerfile                          # verifier image
 │       ├── test.sh
 │       ├── evaluate.py
 │       └── config.json
@@ -84,7 +87,7 @@ src/agentdojo/
 
 ## Run Evaluation / Harness
 
-Tasks need an agent that supports MCP servers (for example `claude-code` or `codex`): the suite tools are only available through the `agentdojo` MCP server. No judge or API key is needed for scoring.
+Tasks need an agent that supports MCP servers (for example `claude-code` or `codex`): the suite tools are only available through the `tools` MCP server. No judge or API key is needed for scoring.
 
 ### Running with Datasets Registry
 
@@ -192,8 +195,10 @@ Planned reproduction:
 - **Upstream `TaskSuite.check()`**: in `agentdojo==0.1.35` it reports every user task as "not injectable" because it only reads tool outputs stored as strings, while the package now stores content blocks. The adapter does not rely on it; the in-process simulation above checks ground truth, and `BaseAttack.get_injection_candidates` (which upstream's attacks use) finds injection vectors for every user task.
 - **Tool schemas**: identical to upstream's function-calling schemas, except that FastMCP inlines `$ref` definitions; this affects `share_file` (workspace), whose `permission` enum is the same.
 - **Step limit**: upstream's tool loop stops after 15 model turns. Harbor agents use their own limits; the agent timeout is 900 s.
-- **Scoring closes the task**: the verifier's request to the sidecar's `/evaluate` endpoint first rejects all further tool calls, so the agent cannot use it to probe its score and keep going.
-- **Reward on the attack split**: `reward` equals `utility`, as upstream's primary number; `security` is reported next to it and is lower-is-better. Harbor's summary averages `security` over all trials of a job, so use `metric.py` for a mixed job.
+- **Scoring**: the sidecar's `/evaluate` endpoint rejects any client other than loopback, so the agent cannot score or close its own episode. Scoring also closes the task, so no tool call after it can change the result. If scoring fails (the sidecar crashed or an upstream check raised), no result file is collected and the trial gets no reward instead of a guessed one.
+- **Invalid tool calls**: upstream records a call to a tool that does not exist in the function stack trace with an error. Here the agent's MCP client rejects such calls before they reach the sidecar, so they are not recorded; no upstream check depends on them.
+- **Network**: the agent's container keeps public network access so CLI agents can reach their model API (upstream's agent has no network beyond its model). `agentdojo` is a public package, so an agent that recognized the tasks could in principle look up upstream's ground truth; the neutral naming above gives it no such hint.
+- **Reward on the attack split**: `reward` equals `utility`, as upstream's primary number; `security` is reported next to it and is lower-is-better. Harbor's summary averages `security` over all trials of a job, so use `metric.py` for a mixed job. `metric.py` leaves trials without rewards out of every metric and lists them so they can be re-run.
 - **Benchmark version**: tasks follow v1.2.2, which includes upstream's fixes to workspace user task 16, workspace injection tasks 11 and 12, and banking user task 6.
 
 ## Installation / Prerequisites
@@ -206,8 +211,8 @@ uv add <package>     # add a dependency
 uv remove <package>  # remove a dependency
 ```
 
-- Docker installed and running (each task starts the main container and the `agentdojo-runtime` sidecar)
-- Harbor (commands above use `uvx --from harbor==0.25.0`)
+- Docker installed and running (each task starts the main container, the `tool-server` sidecar and the verifier container)
+- Harbor 0.25.0 or later (commands above use `uvx --from harbor==0.25.0`); the tasks use sidecar collect hooks, sidecar artifacts and a separate verifier environment
 - Python 3.12+ with `uv` for task generation:
   ```bash
   cd src/agentdojo
@@ -217,8 +222,8 @@ uv remove <package>  # remove a dependency
 
 ## Troubleshooting
 
-- **Agent has no AgentDojo tools**: the agent must support MCP servers; the tools are served by `agentdojo-runtime` at `http://agentdojo-runtime:8000/mcp`.
-- **Verifier exit code 1, no reward**: the verifier could not reach the sidecar, or the sidecar serves a different task than the verifier expects. Check the verifier stdout and the sidecar logs.
+- **Agent has no task tools**: the agent must support MCP servers; the tools are served by `tool-server` at `http://tool-server:8000/mcp`.
+- **Verifier exit code 1, no reward**: the collect hook could not score the episode (see its warning in `trial.log`), or the result belongs to a different task than the verifier expects. Check the verifier stdout and the sidecar logs.
 - **Slow first build**: the sidecar installs about 115 pinned packages once; later tasks reuse the cached layers.
 
 ## Citation

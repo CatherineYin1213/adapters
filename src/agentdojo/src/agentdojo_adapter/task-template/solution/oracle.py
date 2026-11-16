@@ -1,4 +1,4 @@
-"""Replay the user task's upstream ground truth through the agentdojo MCP server."""
+"""Replay the user task's upstream ground truth through the tools MCP server."""
 
 import asyncio
 import json
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastmcp import Client
 
-MCP_URL = "http://agentdojo-runtime:8000/mcp"
+MCP_URL = "http://tool-server:8000/mcp"
 
 
 async def main() -> None:

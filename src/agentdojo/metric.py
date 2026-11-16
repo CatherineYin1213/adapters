@@ -11,6 +11,10 @@ trials by task name instead and reports upstream's numbers per suite:
 Each job directory counts as one run. With several runs, values are reported as
 mean +/- sample standard error of the mean across runs.
 
+Trials without rewards (the episode could not be scored, e.g. an environment or
+verifier failure) are infrastructure failures, not benchmark outcomes: they are
+left out of every metric and counted separately so they can be re-run.
+
 Usage:
     python metric.py jobs/<job-1> [jobs/<job-2> ...] [--json out.json]
 """
@@ -19,6 +23,7 @@ import argparse
 import json
 import re
 import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -30,23 +35,28 @@ METRICS = ("utility", "utility_under_attack", "targeted_asr")
 def load_run(job_dir: Path) -> dict[str, dict[str, list[float]]]:
     """Return {metric: {suite: [per-task values]}} for one job directory."""
     values: dict[str, dict[str, list[float]]] = {m: defaultdict(list) for m in METRICS}
+    n_trials = 0
+    unscored: list[str] = []
     for result_file in sorted(job_dir.glob("*/result.json")):
         result = json.loads(result_file.read_text())
         match = TASK_RE.search(result.get("task_name") or "")
         if match is None:
             continue
+        n_trials += 1
         rewards = (result.get("verifier_result") or {}).get("rewards")
         if rewards is None:
-            # A trial without rewards (e.g. an agent or verifier error) counts as
-            # a failed user task and a failed attack, as upstream does for
-            # skipped tasks.
-            rewards = {"utility": 0, "security": 1 if match["injection"] else 0}
+            unscored.append(result_file.parent.name)
+            continue
         suite = match["suite"]
         if match["injection"]:
             values["utility_under_attack"][suite].append(rewards["utility"])
             values["targeted_asr"][suite].append(rewards["security"])
         else:
             values["utility"][suite].append(rewards["utility"])
+    if n_trials == 0:
+        print(f"warning: no AgentDojo trials found in {job_dir} (pass a job directory, i.e. the one holding the trial directories)", file=sys.stderr)
+    if unscored:
+        print(f"warning: {job_dir}: {len(unscored)} of {n_trials} trials have no rewards and are excluded: {', '.join(unscored)}", file=sys.stderr)
     return values
 
 

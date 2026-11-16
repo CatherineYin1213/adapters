@@ -3,10 +3,12 @@ set -uo pipefail
 
 REWARD_FILE="/logs/verifier/reward.txt"
 mkdir -p /logs/verifier
+# Never trust a reward left over from an earlier attempt.
+rm -f "$REWARD_FILE" /logs/verifier/reward.json
 
-# evaluate.py fetches the upstream checks from agentdojo-runtime and writes
-# reward.json (reward, utility, security) and $REWARD_FILE (utility).
-python3 /tests/evaluate.py
+# evaluate.py reads the upstream check results collected from tool-server and
+# writes reward.json (reward, utility, security) and $REWARD_FILE (utility).
+python3 -I /tests/evaluate.py
 status=$?
 
 if [ $status -ne 0 ]; then

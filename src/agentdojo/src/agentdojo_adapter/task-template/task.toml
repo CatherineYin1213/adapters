@@ -1,5 +1,10 @@
 schema_version = "1.0"
 
+# The verifier runs in its own container (tests/Dockerfile). After the agent's
+# container is stopped, a collect hook scores the episode inside tool-server
+# and only that result file is handed to the verifier.
+artifacts = [{ source = "/results/evaluation.json", service = "tool-server" }]
+
 [task]
 name = "ethz-spylab/agentdojo__{task_name}"
 authors = [
@@ -23,6 +28,12 @@ injection_task_id = "{injection_task_id}"
 attack = "{attack}"
 
 [verifier]
+environment_mode = "separate"
+timeout_sec = 120.0
+
+[[verifier.collect]]
+service = "tool-server"
+command = "python3 /app/collect.py"
 timeout_sec = 120.0
 
 [agent]
@@ -36,6 +47,6 @@ storage_mb = 10240
 gpus = 0
 
 [[environment.mcp_servers]]
-name = "agentdojo"
+name = "tools"
 transport = "streamable-http"
-url = "http://agentdojo-runtime:8000/mcp"
+url = "http://tool-server:8000/mcp"

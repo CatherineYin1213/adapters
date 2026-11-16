@@ -1,10 +1,10 @@
 services:
   main:
     depends_on:
-      agentdojo-runtime:
+      tool-server:
         condition: service_healthy
 
-  agentdojo-runtime:
+  tool-server:
     build:
       context: ./runtime-server
     expose:

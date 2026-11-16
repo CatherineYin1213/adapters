@@ -8,7 +8,10 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py task_config.json ./
+COPY server.py collect.py task_config.json ./
+
+# collect.py writes the scored episode here for Harbor to collect.
+RUN mkdir -p /results
 
 EXPOSE 8000
 

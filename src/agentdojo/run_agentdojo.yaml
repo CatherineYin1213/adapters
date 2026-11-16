@@ -13,7 +13,7 @@ environment:
   # env:
   #   DAYTONA_API_KEY: ${DAYTONA_API_KEY}
 # Tasks need an MCP-capable agent: the suite tools are served by the
-# agentdojo-runtime sidecar over MCP. No judge or API key is needed to score.
+# tool-server sidecar over MCP. No judge or API key is needed to score.
 agents:
   - name: oracle
   # - name: claude-code
