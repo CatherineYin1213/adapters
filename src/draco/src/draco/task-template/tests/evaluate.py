@@ -17,6 +17,7 @@ endpoint and sampling settings are configurable through environment variables
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -32,6 +33,7 @@ litellm.suppress_debug_info = True
 
 REPORT_FILE = Path("/app/report.md")
 TASK_FILE = Path(__file__).parent / "task.json"
+ORACLE_SHA256_FILE = Path(__file__).parent / "oracle_report.sha256"
 VERIFIER_DIR = Path("/logs/verifier")
 
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL") or "gemini/gemini-3-pro-preview"
@@ -113,13 +115,26 @@ def pass_rate(reports) -> float:
     return passed / len(reports)
 
 
+def read_report() -> str:
+    """Return the agent's report, or "" when there is no readable report."""
+    # Only a regular file counts: a symlink could point at grader files such
+    # as tests/task.json.
+    if REPORT_FILE.is_symlink() or not REPORT_FILE.is_file():
+        return ""
+    try:
+        return REPORT_FILE.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        print(f"Report is not valid UTF-8 ({e}); treating it as missing")
+        return ""
+
+
 async def main() -> int:
     VERIFIER_DIR.mkdir(parents=True, exist_ok=True)
     task = json.loads(TASK_FILE.read_text())
     sections = task["rubric"]["sections"]
     criteria = [(s["id"], c) for s in sections for c in s["criteria"]]
 
-    content = REPORT_FILE.read_text(encoding="utf-8") if REPORT_FILE.exists() else ""
+    content = read_report()
     if not content.strip():
         # Every positive criterion would be UNMET, so the clamped score is 0.
         print(f"No report found at {REPORT_FILE} (or it is empty); reward = 0")
@@ -127,9 +142,14 @@ async def main() -> int:
         return 0
 
     if ORACLE_MODE:
-        # Pipeline check only (same approach as the clbench adapter): the report
-        # was written and the rubric loads. No judge calls, so this says nothing
-        # about grading correctness.
+        # Pipeline check only (same approach as the clbench adapter): the staged
+        # oracle report arrived and the rubric loads. No judge calls, so this
+        # says nothing about grading correctness. Any other report fails, so a
+        # stray ORACLE_MODE=true can never score an agent run.
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if digest != ORACLE_SHA256_FILE.read_text().strip():
+            print("ORACLE_MODE: report is not the staged oracle report", file=sys.stderr)
+            return 1
         if not criteria or not all(
             {"weight", "requirement"} <= c.keys() for _, c in criteria
         ):

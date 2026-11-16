@@ -11,6 +11,7 @@ Dataset: https://huggingface.co/datasets/perplexity-ai/draco
 Grader: https://github.com/paper-instruments/rubric
 """
 
+import hashlib
 import json
 import logging
 import shutil
@@ -146,8 +147,11 @@ class DracoAdapter:
                 ensure_ascii=False,
             )
         )
-        (task_dir / "solution" / "report.md").write_text(
-            self._oracle_report(record, rubric)
+        oracle_report = self._oracle_report(record, rubric)
+        (task_dir / "solution" / "report.md").write_text(oracle_report, encoding="utf-8")
+        # Lets ORACLE_MODE accept only the staged oracle report.
+        (task_dir / "tests" / "oracle_report.sha256").write_text(
+            hashlib.sha256(oracle_report.encode("utf-8")).hexdigest() + "\n"
         )
 
     def run(self) -> tuple[int, int]:

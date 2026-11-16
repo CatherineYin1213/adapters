@@ -35,7 +35,7 @@ A MET negative criterion lowers the score. The benchmark score is the mean norma
   - the judge is asked for the library's `PerCriterionOutput` JSON schema, as the library's reference generate function does
 - Judge defaults follow the paper's primary judge configuration (Table 16): `gemini/gemini-3-pro-preview`, thinking level low (`JUDGE_REASONING_EFFORT=low`), temperature 0.2. Any LiteLLM-supported judge can be used via `JUDGE_MODEL`, with optional `JUDGE_API_BASE` / `JUDGE_API_KEY` for proxies and `JUDGE_API_VERSION` for Azure-style gateways (`JUDGE_MODEL=azure/<deployment>`).
 - Per-criterion verdicts and judge explanations are written to `/logs/verifier/rubric_results.jsonl`. `/logs/verifier/summary.json` records the normalized score, raw weighted score, pass rate, per-axis scores, the judge settings, and the model names the endpoint reported (`judge_models_served`), since a gateway may route a requested name to a different model.
-- Rubrics live only in `tests/`, so the agent never sees them.
+- The verifier runs in its own container (`environment_mode = "separate"`), built from `tests/Dockerfile`. Only `/app/report.md` is copied over from the agent's container, so the agent never sees the rubric, the grader library or the judge client and cannot tamper with them. A symlinked or non-UTF-8 report counts as missing.
 
 ## Generated Task Structure
 
@@ -45,14 +45,16 @@ draco/
 │   ├── task.toml                 # Task config; domain and rubric stats in [metadata]; judge env in [verifier.env]
 │   ├── instruction.md            # Upstream query + output location (/app/report.md)
 │   ├── environment/
-│   │   └── Dockerfile            # python:3.12-slim + litellm + rubric (grader library)
+│   │   └── Dockerfile            # Agent image: python:3.12-slim + curl
 │   ├── solution/
 │   │   ├── solve.sh              # Copies report.md to /app/report.md
 │   │   └── report.md             # Staged oracle report
 │   └── tests/
 │       ├── test.sh               # Runs evaluate.py
 │       ├── evaluate.py           # Calls the grader library with a LiteLLM judge; writes reward.txt
-│       └── task.json             # This task's query and weighted rubric
+│       ├── Dockerfile            # Verifier image: python:3.12-slim + litellm + rubric (grader library) + tests/
+│       ├── task.json             # This task's query and weighted rubric
+│       └── oracle_report.sha256  # Hash of solution/report.md, checked in ORACLE_MODE
 ```
 
 Adapter code directory:
@@ -76,6 +78,7 @@ src/draco/
         ├── solution/
         │   └── solve.sh
         └── tests/
+            ├── Dockerfile
             ├── test.sh
             └── evaluate.py
 ```
@@ -182,15 +185,15 @@ Planned reproduction:
 - **Judge model and settings**: the paper's primary judge is Gemini-3-Pro with thinking level low and temperature 0.2 (Table 16); the adapter uses these by default. The library's own reference generate function instead calls `gemini-3-pro-preview` at temperature 0 with no thinking setting; the adapter follows the paper. LiteLLM maps `JUDGE_REASONING_EFFORT=low` to Gemini 3's `thinkingLevel: low`; its warning about temperatures below 1.0 on Gemini 3 is expected here. The paper notes that absolute scores vary across judges (Table 15) while rankings stay stable, so parity must use the same judge and settings on both sides, and `judge_models_served` in `summary.json` should be checked to confirm which model actually graded.
 - **Judge prompt version**: the grader library is installed from GitHub at commit `eb0755a` rather than from PyPI. The PyPI release (`rubric==2.2.0`) asks the judge for the verdict before the explanation; the paper's Appendix C.5 prompt, and the library from commit `fd34de1` onward, ask for the explanation first. Two small wording differences remain between the PDF and the library prompt ("strict about factual accuracy **and** flexible about wording" in the PDF versus "**but**" in the library, and one example criterion reading "base margin 17.2%" versus "base margin as 17.2%"); the library prompt is used unchanged.
 - **Oracle**: DRACO ships no reference reports, so oracle validation has two parts (the plan is to be confirmed with the Harbor team):
-  1. **Pipeline check, `ORACLE_MODE=true`** (same approach as the clbench adapter). The verifier confirms that `/app/report.md` was written and non-empty and that the task's rubric loads, then writes reward 1.0 without calling the judge. This is expected to give 100% on all 100 tasks at no judge cost. It validates the environment, solution and verifier wiring only, **not** grading correctness. Never set `ORACLE_MODE` for agent runs.
-  2. **Grading check, real judge.** Run the oracle with `ORACLE_MODE` unset to grade the staged reports with the LLM judge. By default, `solution/report.md` is a rubric-derived report that restates each task's positive criteria under their axis. Pass `--oracle-reports-dir` to stage real reports instead, for example the best agent report per task from parity runs. Judge scores are not deterministic and are not expected to reach 1.0. Measured on all 100 tasks with the default rubric-derived reports, judged by `gpt-5.2-2025-12-11` with the paper's GPT-5.2 settings (`JUDGE_REASONING_EFFORT=none`, `JUDGE_TEMPERATURE=0`; confirmed in `judge_models_served`): 3,934/3,934 criteria graded, mean reward 0.741 (median 0.789, range 0.054 to 0.980), mean pass rate 0.768. Four tasks first hit the judge endpoint's per-minute rate limit and were re-run at lower concurrency. The score is high because many DRACO criteria are phrased as statements ("States X"), so restating them reads as content; GPT-5.2 still marks a criterion UNMET when the report only lists it as a requirement.
+  1. **Pipeline check, `ORACLE_MODE=true`** (same approach as the clbench adapter). The verifier confirms that `/app/report.md` is the staged oracle report (by SHA-256) and that the task's rubric loads, then writes reward 1.0 without calling the judge. Any other report fails the verifier without a reward, so a stray `ORACLE_MODE=true` cannot score an agent run. This is expected to give 100% on all 100 tasks at no judge cost. It validates the environment, solution and verifier wiring only, **not** grading correctness. Never set `ORACLE_MODE` for agent runs.
+  2. **Grading check, real judge.** Run the oracle with `ORACLE_MODE` unset to grade the staged reports with the LLM judge. By default, `solution/report.md` is a rubric-derived report that restates each task's positive criteria under their axis. Pass `--oracle-reports-dir` to stage real reports instead, for example the best agent report per task from parity runs. Judge scores are not deterministic and are not expected to reach 1.0. Measured on all 100 tasks with the default rubric-derived reports (before the verifier moved to its own container; the grading code path is unchanged), judged by `gpt-5.2-2025-12-11` with the paper's GPT-5.2 settings (`JUDGE_REASONING_EFFORT=none`, `JUDGE_TEMPERATURE=0`; confirmed in `judge_models_served`): 3,934/3,934 criteria graded, mean reward 0.741 (median 0.789, range 0.054 to 0.980), mean pass rate 0.768. Four tasks first hit the judge endpoint's per-minute rate limit and were re-run at lower concurrency. The score is high because many DRACO criteria are phrased as statements ("States X"), so restating them reads as content; GPT-5.2 still marks a criterion UNMET when the report only lists it as a requirement.
 - **Judge failures**: each judge call is retried up to `JUDGE_MAX_ATTEMPTS` times (default 5) with exponential backoff, and a response that is not bare JSON is parsed from the first `{...}` block. The library has no fallback for a criterion that cannot be graded, and dropping or zeroing one would change the score, so if any criterion still fails the verifier exits non-zero without writing a reward.
 - **Reward range**: the reward is the clamped normalized score in [0, 1], as in the paper. The unclamped weighted sum is kept as `raw_score` in `summary.json`.
 - **Empty reports**: a missing or empty `/app/report.md` scores 0.0 without calling the judge. Graded by the judge, it would have every positive criterion UNMET and the same clamped score of 0.
 - **Agent prompt**: the paper's Appendix C.4 system prompt is specific to its Claude Opus baseline (server-side web search and code execution tools, and an "Exact Answer / Confidence" answer format); it is not part of the benchmark and is not used. Agents receive the query verbatim plus the output-location suffix.
 - **Long reports**: each judge call carries the whole report. The default judge has a 1M-token context, so no chunking is needed; with a smaller-context judge, very long reports may fail.
 - **Time-sensitive queries**: rubrics reflect information available when the benchmark was built (late 2025), and web content changes over time, so scores can drift between runs on different dates.
-- **Web access**: agents need internet access (`network_mode = "public"`) and a web search/fetch capability.
+- **Web access**: agents need internet access (`network_mode = "public"`) and a web search/fetch capability. The queries and rubrics are public on HuggingFace, so an agent searching the open web could in principle find the rubric for its task. The benchmark depends on open web research, so no network allowlist is applied.
 
 ## Installation / Prerequisites
 
@@ -203,7 +206,7 @@ uv remove <package>  # remove a dependency
 ```
 
 - Docker installed and running
-- Harbor (commands above use `uvx --from harbor==0.25.0`)
+- Harbor 0.25.0 or later (commands above use `uvx --from harbor==0.25.0`)
 - Python 3.13+ with `uv` for task generation:
   ```bash
   cd src/draco

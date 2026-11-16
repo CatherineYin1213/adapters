@@ -1,5 +1,9 @@
 schema_version = "1.0"
 
+# The verifier runs in its own container (tests/Dockerfile). Only the report is
+# copied over from the agent's container.
+artifacts = ["/app/report.md"]
+
 [task]
 name = "perplexity-ai/draco__{task_id}"
 authors = [
@@ -26,6 +30,7 @@ n_criteria = {n_criteria}
 n_negative_criteria = {n_negative_criteria}
 
 [verifier]
+environment_mode = "separate"
 network_mode = "public"
 timeout_sec = 1800.0
 
@@ -45,8 +50,8 @@ JUDGE_API_VERSION = "${JUDGE_API_VERSION:-}"
 GEMINI_API_KEY = "${GEMINI_API_KEY:-}"
 OPENAI_API_KEY = "${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY:-}"
-# "true" skips the judge and only checks that a report was written (oracle
-# pipeline validation). Never set this for agent runs.
+# "true" skips the judge and only checks that the report is the staged oracle
+# report (oracle pipeline validation). Any other report fails the verifier.
 ORACLE_MODE = "${ORACLE_MODE:-}"
 
 [agent]
