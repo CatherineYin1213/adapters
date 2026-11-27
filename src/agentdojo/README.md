@@ -91,14 +91,16 @@ Tasks need an agent that supports MCP servers (for example `claude-code` or `cod
 
 ### Running with Datasets Registry
 
-Simply run:
+Registration is submitted in [dataset PR #313](https://github.com/harbor-framework/harbor-datasets/pull/313). The commands below become available after maintainer publication; use local `-p` paths until then. Requested tags are `parity` (20 tasks) and `v1.0` (all 1,046 tasks), publishing the full set last so `latest` resolves to it.
+
+After publication, run:
 
 ```bash
 # Oracle agent (reference solution)
-uvx --from harbor==0.25.0 harbor run -d ethz-spylab/agentdojo
+uvx --from harbor==0.27.0 harbor run -d ethz-spylab/agentdojo
 
 # Use your specified agent and model
-uvx --from harbor==0.25.0 harbor run -d ethz-spylab/agentdojo -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.27.0 harbor run -d ethz-spylab/agentdojo -a <agent_name> -m "<model_name>"
 ```
 
 from the adapters repository root to evaluate on the entire dataset.
@@ -112,13 +114,13 @@ The example configuration file for the adapter is provided at `src/agentdojo/run
 ```bash
 # From the repository root
 # Run a job with the default adapter configuration
-uvx --from harbor==0.25.0 harbor run -c src/agentdojo/run_agentdojo.yaml -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.27.0 harbor run -c src/agentdojo/run_agentdojo.yaml -a <agent_name> -m "<model_name>"
 
 # Or run a job without configuration yaml but instead with locally prepared dataset path
-uvx --from harbor==0.25.0 harbor run -p datasets/agentdojo -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.27.0 harbor run -p datasets/agentdojo -a <agent_name> -m "<model_name>"
 
 # Resume a previously started job
-uvx --from harbor==0.25.0 harbor job resume -p /path/to/jobs/directory
+uvx --from harbor==0.27.0 harbor job resume -p /path/to/jobs/directory
 
 # Upstream metrics (utility, utility under attack, targeted ASR) per suite
 python src/agentdojo/metric.py jobs/<job-dir>
@@ -132,10 +134,10 @@ For quick testing or debugging a single task:
 
 ```bash
 # Run a single task with oracle
-uvx --from harbor==0.25.0 harbor trial start -p datasets/agentdojo/workspace-user_task_0-injection_task_0
+uvx --from harbor==0.27.0 harbor trial start -p datasets/agentdojo/workspace-user_task_0-injection_task_0
 
 # Run a single task with a specific agent and model
-uvx --from harbor==0.25.0 harbor trial start -p datasets/agentdojo/workspace-user_task_0 -a <agent_name> -m "<model_name>"
+uvx --from harbor==0.27.0 harbor trial start -p datasets/agentdojo/workspace-user_task_0 -a <agent_name> -m "<model_name>"
 ```
 
 Trial outputs are saved in the `trials/` directory by default (configurable via `--trials-dir`).
@@ -163,7 +165,7 @@ Tasks are written to `datasets/agentdojo/` with one directory per task. Each tas
 
 ## Comparison with Original Benchmark (Parity)
 
-Local parity runs completed on 2026-11-26: 20 tasks with DeepSeek 4.1 Flash, three runs per side. The native AgentDojo pipeline and its Harbor MCP wrapper ran independently with identical initial model requests. All 120 formal trials completed without infrastructure errors; all 449 recorded model responses reported `deepseek-v4-1-flash-261017`. No LLM judge is used. See [the parity runner](parity/README.md). Artifact publication, the original-side runner fork and dataset registration links are pending.
+Local parity runs completed on 2026-11-26: 20 tasks with DeepSeek 4.1 Flash, three runs per side. The native AgentDojo pipeline and its Harbor MCP wrapper ran independently with identical initial model requests. All 120 formal trials completed without infrastructure errors; all 449 recorded model responses reported `deepseek-v4-1-flash-261017`. No LLM judge is used. See [the parity runner](parity/README.md). [Native runner fork](https://github.com/CatherineYin1213/agentdojo/tree/d0b7461b60d359b9be8699650fcac2e5c0c3a204/harbor_parity), [dataset registration PR](https://github.com/harbor-framework/harbor-datasets/pull/313), and [official parity PR](https://huggingface.co/datasets/harborframework/parity-experiments/discussions/318). The sanitized bundle passes hash verification and exact aggregate recomputation, but the official HF upload is blocked by its existing file-count limit ([issue #129](https://github.com/harbor-framework/adapters/issues/129)); no artifact files have landed in that parity PR yet.
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |
 |-------|-------|--------|------------------|--------------|------------------------------|----------------------------|
@@ -235,7 +237,7 @@ Planned reproduction:
   The matching Harbor agent in `parity/harbor_agent.py` reuses this upstream tool-calling pipeline through MCP. The parity runner supports the configured gateway/model directly; the upstream CLI example above requires a model registered by upstream.
 - **Harbor side**:
   ```bash
-  uvx --from harbor==0.25.0 harbor run -c src/agentdojo/run_agentdojo.yaml -a <agent> -m "<model>"
+  uvx --from harbor==0.27.0 harbor run -c src/agentdojo/run_agentdojo.yaml -a <agent> -m "<model>"
   python src/agentdojo/metric.py jobs/<job-dir>
   ```
 
@@ -267,7 +269,7 @@ uv remove <package>  # remove a dependency
 ```
 
 - Docker installed and running (each task starts the main container, the `tool-server` sidecar and the verifier container)
-- Harbor 0.25.0 or later (commands above use `uvx --from harbor==0.25.0`); the tasks use sidecar collect hooks, sidecar artifacts and a separate verifier environment
+- Harbor 0.25.0 or later (commands above use `uvx --from harbor==0.27.0`); the tasks use sidecar collect hooks, sidecar artifacts and a separate verifier environment
 - Python 3.12+ with `uv` for task generation:
   ```bash
   cd src/agentdojo
