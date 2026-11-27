@@ -5,8 +5,11 @@ Two splits, matching the two numbers upstream reports for a model:
 - `attack`: every (user task, injection task) pair of a suite, with the
   injections the chosen attack places in the environment (utility under attack
   and security, i.e. whether the injection task succeeded).
+
+`parity` is a fixed sample of both (see `select_parity_subset`).
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -32,6 +35,10 @@ DEFAULT_ATTACK = "important_instructions_no_model_name"
 # default model. Only attacks that address the model by name are affected.
 DEFAULT_ATTACK_TARGET_MODEL = "gpt-4o-2024-05-13"
 SPLITS = ("user", "attack")
+# Agreed 20-task parity subset: balanced clean/attacked groups, each spread
+# over suites in proportion to their size and picked with a fixed seed.
+PARITY_SIZES = {"user": 10, "attack": 10}
+PARITY_SEED = 42
 
 
 class _AttackTarget(BasePipelineElement):
@@ -67,6 +74,45 @@ def _task_number(task_id: str) -> int:
     return int(re.search(r"(\d+)$", task_id).group(1))
 
 
+def _allocate(sizes: dict[str, int], total: int) -> dict[str, int]:
+    """Split `total` over groups in proportion to `sizes` (largest remainder)."""
+    count = sum(sizes.values())
+    quotas = {group: total * size / count for group, size in sizes.items()}
+    allocation = {group: int(quota) for group, quota in quotas.items()}
+    leftover = total - sum(allocation.values())
+    by_remainder = sorted(quotas, key=lambda g: (allocation[g] - quotas[g], g))
+    for group in by_remainder[:leftover]:
+        allocation[group] += 1
+    return allocation
+
+
+def select_parity_subset(
+    records: list[TaskRecord], seed: int = PARITY_SEED
+) -> list[TaskRecord]:
+    """Pick the parity subset from the full set of records.
+
+    For each split, `PARITY_SIZES[split]` tasks are spread over the suites in
+    proportion to their size. Within a suite, the tasks whose
+    sha256("<seed>:<task id>") is smallest are chosen, so the subset depends
+    only on the seed and the benchmark version.
+    """
+
+    def rank(record: TaskRecord) -> str:
+        return hashlib.sha256(f"{seed}:{record.local_id}".encode()).hexdigest()
+
+    chosen: set[str] = set()
+    for split, total in PARITY_SIZES.items():
+        by_suite: dict[str, list[TaskRecord]] = {}
+        for record in records:
+            if record.split == split:
+                by_suite.setdefault(record.suite_name, []).append(record)
+        allocation = _allocate({suite: len(rs) for suite, rs in by_suite.items()}, total)
+        for suite, suite_records in by_suite.items():
+            picked = sorted(suite_records, key=rank)[: allocation[suite]]
+            chosen.update(r.local_id for r in picked)
+    return [r for r in records if r.local_id in chosen]
+
+
 class AgentDojoAdapter:
     def __init__(
         self,
@@ -84,7 +130,10 @@ class AgentDojoAdapter:
         self.limit = limit
         self.overwrite = overwrite
         self.task_ids = set(task_ids) if task_ids else None
-        self.splits = SPLITS if split == "all" else (split,)
+        if split not in (*SPLITS, "all", "parity"):
+            raise ValueError(f"Unknown split {split!r}")
+        self.parity = split == "parity"
+        self.splits = SPLITS if split in ("all", "parity") else (split,)
         self.suite_names = suites
         self.benchmark_version = benchmark_version
         self.attack_name = attack
@@ -92,10 +141,10 @@ class AgentDojoAdapter:
         self.suites = get_suites(benchmark_version)
         self.system_message = load_system_message(None)
 
-    def _records(self) -> list[TaskRecord]:
+    def _records(self, suite_names: list[str] | None) -> list[TaskRecord]:
         records = []
         for suite_name, suite in self.suites.items():
-            if self.suite_names and suite_name not in self.suite_names:
+            if suite_names and suite_name not in suite_names:
                 continue
             attack = load_attack(self.attack_name, suite, _AttackTarget(self.attack_target_model))
             if attack.is_dos_attack:
@@ -121,7 +170,13 @@ class AgentDojoAdapter:
         return records
 
     def run(self) -> tuple[int, int]:
-        records = self._records()
+        if self.parity:
+            # Sample from every suite so `--suites` narrows the same fixed subset.
+            records = select_parity_subset(self._records(None))
+            if self.suite_names:
+                records = [r for r in records if r.suite_name in self.suite_names]
+        else:
+            records = self._records(self.suite_names)
         if self.task_ids is not None:
             records = [r for r in records if r.local_id in self.task_ids]
             missing = self.task_ids - {r.local_id for r in records}

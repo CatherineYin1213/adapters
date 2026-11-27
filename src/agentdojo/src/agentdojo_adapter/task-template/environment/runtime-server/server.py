@@ -55,7 +55,7 @@ runtime = FunctionsRuntime(suite.tools)
 
 calls: list[FunctionCall] = []
 trace: list[dict[str, Any]] = []
-state: dict[str, Any] = {"answer": None, "closed": False}
+state: dict[str, Any] = {"answer": None, "closed": False, "parity_final": None}
 
 
 def call_suite_tool(name: str, arguments: dict[str, Any]) -> str:
@@ -76,7 +76,11 @@ class SuiteTool(Tool):
     """An AgentDojo suite function exposed with its upstream name, description and schema."""
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
-        return ToolResult(content=[TextContent(type="text", text=call_suite_tool(self.name, arguments))])
+        output = call_suite_tool(self.name, arguments)
+        # Transport metadata lets the upstream pipeline preserve its error
+        # message encoding. The model-visible text remains unchanged.
+        return ToolResult(content=[TextContent(type="text", text=output)],
+                          meta={"runtime_error": bool(trace and trace[-1]["error"])})
 
 
 mcp = FastMCP("tools")
@@ -108,12 +112,18 @@ async def evaluate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     state["closed"] = True
     model_output = [text_content_block_from_string(state["answer"] or "")]
+    scoring_calls = calls
+    if state["parity_final"] is not None:
+        # A trusted host harness supplies the upstream pipeline's final message
+        # and stack, including any unexecuted calls at the iteration limit.
+        model_output = state["parity_final"]["model_output"]
+        scoring_calls = state["parity_final"]["calls"]
     utility = suite._check_task_result(
-        user_task, model_output, pre_environment, task_environment, calls
+        user_task, model_output, pre_environment, task_environment, scoring_calls
     )
     security = (
         suite._check_task_result(
-            injection_task, model_output, pre_environment, task_environment, calls
+            injection_task, model_output, pre_environment, task_environment, scoring_calls
         )
         if injection_task is not None
         else None
@@ -131,6 +141,21 @@ async def evaluate(request: Request) -> JSONResponse:
             "answer": state["answer"],
         }
     )
+
+
+@mcp.custom_route("/parity-finalize", methods=["POST"])
+async def parity_finalize(request: Request) -> JSONResponse:
+    """Host-only alignment with run_task_with_pipeline's final-message scoring."""
+    if request.client is None or request.client.host not in LOOPBACK_HOSTS:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if state["closed"]:
+        return JSONResponse({"error": "closed"}, status_code=409)
+    payload = await request.json()
+    state["parity_final"] = {
+        "model_output": payload["model_output"],
+        "calls": [FunctionCall.model_validate(call) for call in payload["calls"]],
+    }
+    return JSONResponse({"ok": True})
 
 
 if __name__ == "__main__":

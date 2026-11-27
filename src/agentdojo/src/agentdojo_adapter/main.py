@@ -50,10 +50,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--split",
-        choices=["user", "attack", "all"],
+        choices=["user", "attack", "all", "parity"],
         default="all",
         help="user: user tasks without injections; attack: every user task x injection "
-        "task pair under the attack; all: both",
+        "task pair under the attack; all: both; parity: the 105-task parity subset "
+        "(10 user + 95 attack tasks)",
     )
     parser.add_argument(
         "--suites",
