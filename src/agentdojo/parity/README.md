@@ -7,7 +7,7 @@ The formal experiment completed three independent runs per side on 2026-11-26.
 A separate Codex 0.118.0 Harbor run on the 20 tasks checks standard-agent
 generalization. All 120 formal trials and 20 generalization trials completed
 without infrastructure errors. Full results and limitations are in the adapter
-README. The [native runner fork](https://github.com/CatherineYin1213/agentdojo/tree/d0b7461b60d359b9be8699650fcac2e5c0c3a204/harbor_parity) and [dataset PR](https://github.com/harbor-framework/harbor-datasets/pull/313) are published. [Official artifact PR #318](https://huggingface.co/datasets/harborframework/parity-experiments/discussions/318) is blocked by the shared repository file-count limit; its artifact files are not uploaded yet.
+README. The [native runner fork](https://github.com/CatherineYin1213/agentdojo/tree/d0b7461b60d359b9be8699650fcac2e5c0c3a204/harbor_parity) and [dataset PR](https://github.com/harbor-framework/harbor-datasets/pull/313) are published. [Official artifact PR #318](https://huggingface.co/datasets/harborframework/parity-experiments/discussions/318) links the complete [sanitized evidence at a pinned revision](https://huggingface.co/datasets/Catherine1213/agentdojo-parity-experiments/tree/b866de430b5e256cce9adcd029c6d264abd2eedf/adapters/agentdojo). The shared repository file-count limit prevents uploading there, so this contributor-owned mirror holds the files. All 24 public files were downloaded and hash-verified; aggregate recomputation matches the recorded results.
 
 Both parity arms use agentdojo 0.1.35, benchmark v1.2.2, the
 `important_instructions_no_model_name` attack and `deepseek-v4.1-flash`.
@@ -81,6 +81,6 @@ reported without selectively rerunning tasks. The offline differential test
 freezes dynamic wall-clock fields only while comparing the two transports;
 actual experiments retain upstream's live timestamps. Runtime checks and oracle
 success are not completed parity evidence. The local result entries have been
-checked against the saved trials; publication links identify the submitted PRs. The official artifact upload remains
-blocked by the shared HF repository file-count limit; a PR link alone does not
-mean the artifact files or registry dataset are published.
+checked against the saved trials; publication links identify the submitted PRs and the immutable artifact mirror.
+The mirror is published and verified; the official repository upload remains
+blocked by its file-count limit, and dataset registry publication is pending.

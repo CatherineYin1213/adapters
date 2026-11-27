@@ -43,7 +43,7 @@
           "None"
         ],
         "parity_costs": null,
-        "notes": "Local parity completed 2026-11-26, three runs per side, matching run ranges on all reported metrics. Clean utility 100% on both sides. Ten tasks in this split; ceiling/floor scores limit broader conclusions. Separate Codex 0.118.0 generalization run on 20 tasks: clean/attacked utility 100%, ASR 0%, zero exceptions. Native runner published; dataset registration submitted as harbor-datasets#313. Official parity PR #318 upload is blocked by the shared HF repository file-count limit; artifact publication and registry publication remain pending."
+        "notes": "Local parity completed 2026-11-26, three runs per side, matching run ranges on all reported metrics. Clean utility 100% on both sides. Ten tasks in this split; ceiling/floor scores limit broader conclusions. Separate Codex 0.118.0 generalization run on 20 tasks: clean/attacked utility 100%, ASR 0%, zero exceptions. Native runner published; dataset registration submitted as harbor-datasets#313. Sanitized artifacts are published at https://huggingface.co/datasets/Catherine1213/agentdojo-parity-experiments/tree/b866de430b5e256cce9adcd029c6d264abd2eedf/adapters/agentdojo, with remote hash verification and exact aggregate recomputation. Official parity PR #318 links this revision because the shared repository is full. Dataset registry publication remains pending."
       },
       {
         "split": "attack",
@@ -61,7 +61,7 @@
           "None"
         ],
         "parity_costs": null,
-        "notes": "Local parity completed 2026-11-26, three runs per side, matching run ranges on all reported metrics. important_instructions_no_model_name attack; attacked utility original 100%, Harbor 96.67% ± 3.33% sample SEM; targeted ASR 0% on both sides. Ten tasks in this split; ceiling/floor scores limit broader conclusions. Separate Codex 0.118.0 generalization run on 20 tasks: clean/attacked utility 100%, ASR 0%, zero exceptions. Native runner published; dataset registration submitted as harbor-datasets#313. Official parity PR #318 upload is blocked by the shared HF repository file-count limit; artifact publication and registry publication remain pending."
+        "notes": "Local parity completed 2026-11-26, three runs per side, matching run ranges on all reported metrics. important_instructions_no_model_name attack; attacked utility original 100%, Harbor 96.67% ± 3.33% sample SEM; targeted ASR 0% on both sides. Ten tasks in this split; ceiling/floor scores limit broader conclusions. Separate Codex 0.118.0 generalization run on 20 tasks: clean/attacked utility 100%, ASR 0%, zero exceptions. Native runner published; dataset registration submitted as harbor-datasets#313. Sanitized artifacts are published at https://huggingface.co/datasets/Catherine1213/agentdojo-parity-experiments/tree/b866de430b5e256cce9adcd029c6d264abd2eedf/adapters/agentdojo, with remote hash verification and exact aggregate recomputation. Official parity PR #318 links this revision because the shared repository is full. Dataset registry publication remains pending."
       }
     ]
   }
